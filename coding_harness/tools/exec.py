@@ -7,6 +7,7 @@ truncation, the deny-list, and dry-run mode.
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 
@@ -78,13 +79,21 @@ def build_exec_tools(
             return _run([sys.executable, str(resolved)], timeout)
 
         # Write the snippet to a temp file inside the workspace so it shares the
-        # jailed cwd and is cleaned up by the OS temp dir lifecycle.
+        # jailed cwd, then remove it afterwards. ``delete=False`` is required so
+        # the file is closed (and runnable on all platforms) before execution;
+        # the finally block guarantees it does not leak into the workspace.
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", dir=jail.root, delete=False, encoding="utf-8"
         ) as fh:
             fh.write(code or "")
             tmp_path = fh.name
-        return _run([sys.executable, tmp_path], timeout)
+        try:
+            return _run([sys.executable, tmp_path], timeout)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     def run_tests(
         path: str | None = None, pattern: str | None = None, timeout: int | None = None
