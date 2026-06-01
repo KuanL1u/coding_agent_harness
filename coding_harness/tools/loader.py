@@ -7,7 +7,7 @@ a ``plugins/`` directory::
     plugins/<name>/
         tool.py        # exposes ``build(ctx) -> Tool | list[Tool]``
         manifest.json  # metadata + lifecycle status
-        test_tool.py   # unit tests the staging gate runs (PT-M2)
+        test_tool.py   # unit tests the staging gate runs
 
 :class:`PluginLoader` scans that directory, loads only plugins whose manifest
 ``status == "active"``, calls each plugin's ``build(ctx)`` with the sandboxed
@@ -21,11 +21,11 @@ plugin (recorded on :attr:`PluginLoader.rejections` and emitted as a
 ``plugin_rejected`` event) — it never aborts the load. A clean load emits
 nothing, so the trace of a normal run is unchanged.
 
-This is PT-M1: the registry is now pluggable, but the agent loop is untouched —
-it still just calls ``registry.schemas()`` / ``registry.dispatch()``. The
-forbidden-import scan and the staging/validation gate that gate *agent-authored*
-tools live in the PT-M2 ``evolve/tools`` package; the loader here trusts that
-only human-approved (merged) plugins ever carry ``status == "active"``.
+The registry is pluggable, but the agent loop is untouched — it still just
+calls ``registry.schemas()`` / ``registry.dispatch()``. The forbidden-import
+scan and the staging/validation gate that gate *agent-authored* tools are not
+built yet; the loader here trusts that only human-approved (merged) plugins ever
+carry ``status == "active"``.
 """
 
 from __future__ import annotations

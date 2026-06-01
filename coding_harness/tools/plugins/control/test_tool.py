@@ -1,4 +1,4 @@
-"""Unit tests for the built-in ``control`` plugin (run by the PT-M2 gate)."""
+"""Unit tests for the built-in ``control`` plugin (run by the validation gate)."""
 
 from __future__ import annotations
 

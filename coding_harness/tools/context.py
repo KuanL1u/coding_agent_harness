@@ -11,7 +11,7 @@ automatically and has **no privileged path** to bypass it.
 :class:`~coding_harness.tools.control.TaskState`, used only by the built-in
 ``control`` plugin (``task_done``). It is deliberately not part of the
 capability surface agent-authored tools are meant to use; the staging gate
-(PT-M2) forbids agent tools from reaching into loop internals.
+forbids agent tools from reaching into loop internals.
 """
 
 from __future__ import annotations

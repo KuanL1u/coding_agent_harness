@@ -1,4 +1,4 @@
-"""Tests for the pluggable tool registry (PT-M1).
+"""Tests for the pluggable tool registry.
 
 Covers: the built-in plugins are discovered (and keep their v1 order); the
 loader filters by manifest status; and every rejection path (bad manifest,

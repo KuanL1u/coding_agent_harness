@@ -59,11 +59,11 @@ class RunResult:
 def _config_snapshot(
     config: Config, system_prompt: str, prompt_version: str | None
 ) -> dict[str, Any]:
-    """The prompt/config identity stamped on each episode (join key for Layer 3).
+    """The prompt/config identity stamped on each episode.
 
-    ``prompt_version`` is the active policy version id when Layer 3 is driving,
-    otherwise a short content hash of the system prompt so outcomes can still be
-    attributed to the exact prompt that produced them.
+    ``prompt_version`` is the active policy version id when prompt/policy
+    self-tuning is driving, otherwise a short content hash of the system prompt
+    so outcomes can still be attributed to the exact prompt that produced them.
     """
     if not prompt_version:
         prompt_hash = hashlib.blake2b(
@@ -80,7 +80,7 @@ def _config_snapshot(
 
 
 def _resolve_policy(config: Config) -> PromptPolicyVersion | None:
-    """Load the active prompt/policy version when Layer 3 is enabled.
+    """Load the active prompt/policy version when self-tuning is enabled.
 
     Bootstraps an empty registry with a ``p1`` seed built from the current code
     defaults (so the first enabled run reproduces v1 behaviour exactly). Returns
@@ -187,7 +187,7 @@ class Agent:
     ) -> "Agent":
         """Build an agent and all its collaborators from config.
 
-        ``policy`` is the active prompt/policy version (Layer 3). When omitted it
+        ``policy`` is the active prompt/policy version. When omitted it
         is loaded from the registry if ``evolve.enabled``; otherwise the harness
         runs on the hardcoded v1 prompt and static config. An explicit ``policy``
         always wins — the evolver's gate uses it to A/B a candidate version.
@@ -216,7 +216,7 @@ class Agent:
         # Route the client's retry/error events into the same trace as the loop.
         if isinstance(llm, LLMClient):
             llm.event_hook = lambda event, fields: logger.log(event, **fields)
-        # The memory layer (Layer 1) is config-gated; ``None`` when disabled.
+        # The memory layer is config-gated; ``None`` when disabled.
         # Its events flow into the same trace as everything else.
         memory = Memory.from_config(
             config, on_event=lambda event, fields: logger.log(event, **fields)
@@ -239,7 +239,7 @@ class Agent:
             {"role": "user", "content": task},
         ]
 
-        # Layer 1, pre-loop: inject the most relevant past experience as a
+        # Memory, pre-loop: inject the most relevant past experience as a
         # leading system message. ``task_embedding`` is reused for the episode
         # record so the task is only embedded once.
         task_embedding: list[float] = []
@@ -328,7 +328,7 @@ class Agent:
                 total_tokens=self.llm.usage.total_tokens,
                 elapsed_s=wall_clock_s,
             )
-            # Layer 1, post-loop: persist the episode (and distill on cadence).
+            # Memory, post-loop: persist the episode (and distill on cadence).
             # Runs even on a crashing/budget-stopped path so the failure is
             # recorded; the call is internally failure-isolated.
             if self.memory is not None:

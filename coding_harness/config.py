@@ -72,7 +72,7 @@ class LoggingConfig:
 
 @dataclass
 class MemoryConfig:
-    """Experience / memory layer (Layer 1).
+    """Experience / memory layer.
 
     Disabled by default so the harness keeps its v1 behaviour unless memory is
     explicitly turned on. ``embedding_model`` of ``""`` or ``"local"`` selects
@@ -97,7 +97,7 @@ class MemoryConfig:
 
 @dataclass
 class EvolveConfig:
-    """Prompt & policy self-tuning (Layer 3).
+    """Prompt & policy self-tuning.
 
     Disabled by default: when off, the agent uses the hardcoded system prompt and
     static config exactly as in v1. When on, the *active* versioned
@@ -125,19 +125,19 @@ class EvolveConfig:
 
 @dataclass
 class ToolEvolutionConfig:
-    """Pluggable tools & memory-driven tool self-extension (Layer 4).
+    """Pluggable tools & memory-driven tool self-extension.
 
-    PT-M1 (shipped): tools are discovered at runtime from ``plugins_dir`` by the
-    :class:`~coding_harness.tools.loader.PluginLoader`, replacing import-time
-    registration. This is always on and behaviourally identical to v1 — the
-    built-in tools live under ``plugins_dir`` and are loaded the same way an
-    agent-authored tool would be.
+    Pluggable registry (shipped): tools are discovered at runtime from
+    ``plugins_dir`` by the :class:`~coding_harness.tools.loader.PluginLoader`,
+    replacing import-time registration. This is always on and behaviourally
+    identical to v1 — the built-in tools live under ``plugins_dir`` and are
+    loaded the same way an agent-authored tool would be.
 
     ``enabled`` gates the *self-extension loop* (gap detection -> propose ->
-    stage -> validate -> open PR), which is not built yet (PT-M2+). The
-    remaining fields are its advisory configuration. ``require_approval`` is the
-    chosen v1 activation model: a new tool only becomes ``active`` by merging a
-    pull request; there is no automated path to activation.
+    stage -> validate -> open PR), which is not built yet. The remaining fields
+    are its advisory configuration. ``require_approval`` is the chosen v1
+    activation model: a new tool only becomes ``active`` by merging a pull
+    request; there is no automated path to activation.
     """
 
     enabled: bool = False

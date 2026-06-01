@@ -218,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--compare-memory",
         action="store_true",
-        help="Run the suite twice (memory OFF then ON) and report both — the L1-M4 A/B.",
+        help="Run the suite twice (memory OFF then ON) and report both.",
     )
     parser.add_argument("--json", action="store_true", help="Emit the report(s) as JSON.")
     args = parser.parse_args(argv)

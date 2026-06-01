@@ -50,7 +50,7 @@ system prompt + task
 | `run_tests` | Run `pytest` |
 | `task_done` | Signal successful completion |
 
-## Pluggable tool registry (Layer 4 / PT-M1)
+## Pluggable tool registry
 
 Tools are **discovered at runtime from a directory**, not hardcoded at import.
 Every tool — built-in or (later) agent-authored — lives as a self-describing
@@ -60,7 +60,7 @@ plugin folder under `coding_harness/tools/plugins/`:
 plugins/<name>/
   tool.py        # exposes build(ctx) -> Tool | list[Tool]
   manifest.json  # metadata + lifecycle status ("staged" | "active" | "disabled")
-  test_tool.py   # unit tests the validation gate runs (PT-M2)
+  test_tool.py   # unit tests the validation gate runs
 ```
 
 At startup `PluginLoader` scans that directory, loads only plugins whose
@@ -82,12 +82,12 @@ order and **runs are behaviourally identical** — the agent loop is unchanged
   the load. A clean built-in load emits nothing, so a normal run's trace is
   unchanged.
 
-> This is PT-M1 of the tool self-extension plan: the registry is now pluggable
-> and reusable for manual tool additions. The memory-driven loop that *proposes*
-> new tools (gap detection → propose → stage → validate → open PR), the staging
-> quarantine, and the forbidden-import scan are **not built yet** (PT-M2+). The
-> `tool_evolution.enabled` flag gates that loop and is off by default; new tools
-> will only ever activate by merging a human-reviewed pull request.
+> The registry is pluggable and reusable for manual tool additions today. The
+> memory-driven loop that *proposes* new tools (gap detection → propose → stage →
+> validate → open PR), the staging quarantine, and the forbidden-import scan are
+> **not built yet**. The `tool_evolution.enabled` flag gates that loop and is off
+> by default; new tools will only ever activate by merging a human-reviewed pull
+> request.
 
 ## Safety
 
@@ -161,7 +161,7 @@ An offline **evolver** then runs this loop:
 DIAGNOSE → PROPOSE → MATERIALIZE → EVALUATE → DECIDE → COMMIT
 ```
 
-- **DIAGNOSE** reads the Layer 1 aggregates into a ranked weakness report
+- **DIAGNOSE** reads the experience-store aggregates into a ranked weakness report
   (premature `task_done`, budget exhaustion, recurring failure signatures, …).
 - **PROPOSE** (an LLM meta-agent, with a deterministic heuristic fallback) emits
   candidate edits.
@@ -186,7 +186,7 @@ bounds cost, the cycle runs offline (never in the live task path), and every
 adoption is a revertible registry/git change.
 
 > **Not built yet:** the evolution cycle currently runs only when invoked
-> manually (the CLI above). **Scheduled cadence (L3-M5)** — running the cycle
+> manually (the CLI above). **Scheduled cadence** — running the cycle
 > automatically on a cron-style schedule or after every *K* live runs — and the
 > **success-rate-over-versions dashboards** are not implemented. The `cadence` /
 > `every_n_runs` config fields are accepted but are advisory metadata only; no
@@ -350,14 +350,14 @@ memory:
   retrieve_k_playbooks: 2
   inject_token_budget: 800
   distill_every_n_episodes: 25
-evolve:                       # Layer 3: prompt/policy self-tuning (off by default)
+evolve:                       # prompt/policy self-tuning (off by default)
   enabled: false
   policy_dir: policy
   adopt_epsilon: 0.03         # require +3% benchmark success to adopt
   max_cost_regression: 0.10   # reject if >10% more tokens/steps
   cycle_budget_tokens: 2000000
-tool_evolution:               # Layer 4: pluggable tools + tool self-extension
-  enabled: false              # gates the self-extension LOOP (PT-M2+); registry is always pluggable
+tool_evolution:               # pluggable tools + tool self-extension
+  enabled: false              # gates the self-extension loop; registry is always pluggable
   require_approval: true      # a new tool only activates by merging a PR (v1 default)
   plugins_dir: ""             # empty -> packaged coding_harness/tools/plugins
   gap_evidence_threshold: 0.25
@@ -380,11 +380,11 @@ coding_harness/
     plugins/      # discovery root: one self-describing folder per tool/group
       files/ search/ exec/ control/         # built-ins (author:"builtin")
   evolve/
-    memory/       # Layer 1: experience store, episodes, embeddings,
+    memory/       # experience store, episodes, embeddings,
                   #   retrieval/injection, distiller (playbooks)
     benchmark/    # Evaluation Gate: held-out tasks/ + runner.py
-    policy/       # Layer 3: versioned prompt/policy registry + whitelisted patch
-    evolver/      # Layer 3: diagnose / propose / evaluate / decide / cycle
+    policy/       # versioned prompt/policy registry + whitelisted patch
+    evolver/      # diagnose / propose / evaluate / decide / cycle
 tests/            # pytest unit tests for the harness
 config.yaml       # sample config
 ```

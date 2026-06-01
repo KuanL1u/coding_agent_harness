@@ -6,7 +6,7 @@ The benchmark suite under ``coding_harness/evolve/benchmark/tasks/`` contains
 from collection so the harness's own test run is unaffected.
 
 Tool plugins under ``coding_harness/tools/plugins/`` ship a ``test_tool.py``
-that the tool-validation gate (PT-M2) runs per-plugin in isolation; it is not
+that the tool-validation gate runs per-plugin in isolation; it is not
 part of the harness's own suite (the built-in tools are already covered by
 ``tests/``), so it is excluded here too.
 """

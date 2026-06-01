@@ -1,8 +1,8 @@
-"""Layer 3's evolver — the offline meta-agent loop.
+"""The evolver — the offline meta-agent loop.
 
 The pipeline, one stage per module:
 
-    DIAGNOSE  (diagnose.py)  Layer-1 aggregates -> ranked weakness report
+    DIAGNOSE  (diagnose.py)  experience-store aggregates -> ranked weakness report
     PROPOSE   (propose.py)   weaknesses + active version -> validated patches
     EVALUATE  (evaluate.py)  Evaluation Gate: active vs each candidate, A/B
     DECIDE    (decide.py)    adoption rule + cost-regression budget
