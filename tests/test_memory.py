@@ -1,4 +1,4 @@
-"""Tests for the Layer 1 memory components (no network; local embedder)."""
+"""Tests for the memory components (no network; local embedder)."""
 
 from __future__ import annotations
 

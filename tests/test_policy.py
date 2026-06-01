@@ -1,4 +1,4 @@
-"""Tests for the Layer 3 policy registry + the whitelisted patch boundary."""
+"""Tests for the policy registry + the whitelisted patch boundary."""
 
 from __future__ import annotations
 

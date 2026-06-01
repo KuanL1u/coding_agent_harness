@@ -1,4 +1,4 @@
-"""DIAGNOSE — turn Layer-1 experience aggregates into a ranked weakness report.
+"""DIAGNOSE — turn experience-store aggregates into a ranked weakness report.
 
 Reads the episode store and computes evidence-backed weaknesses the evolver can
 target: premature ``task_done`` (declared success while tests were failing),

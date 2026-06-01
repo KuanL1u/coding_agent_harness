@@ -1,4 +1,4 @@
-"""Layer 3 — the versioned prompt/policy surface the evolver tunes.
+"""The versioned prompt/policy surface the evolver tunes.
 
 * :class:`PromptPolicyVersion` / :class:`PromptPolicyRegistry` — addressable,
   swappable artifacts with an active pointer (``registry.py``).

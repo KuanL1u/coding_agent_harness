@@ -1,6 +1,6 @@
 """Unit tests for the built-in ``files`` plugin.
 
-Run by the tool-validation gate (PT-M2), not by the harness's own test suite
+Run by the tool-validation gate, not by the harness's own test suite
 (``conftest.py`` excludes ``coding_harness/tools/plugins/*`` from collection).
 The file tools themselves are also covered by ``tests/test_tools.py``.
 """

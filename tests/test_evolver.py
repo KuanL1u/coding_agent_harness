@@ -1,4 +1,4 @@
-"""Tests for the Layer 3 evolver: diagnose, decide, agent policy wiring, and a
+"""Tests for the evolver: diagnose, decide, agent policy wiring, and a
 full end-to-end cycle (heuristic proposer + scripted FakeLLM, no network)."""
 
 from __future__ import annotations
