@@ -153,6 +153,74 @@ adoption is a revertible registry/git change.
 > `every_n_runs` config fields are accepted but are advisory metadata only; no
 > scheduler reads them yet.
 
+## Trusting the evolution signal (known limitations)
+
+The scaffolding for self-evolution is safe by construction in what it *can't*
+touch (sandbox, deny-list, timeouts, workspace, tool code — all unreachable from
+a `PromptPolicyPatch`). The open work is in the *measurement* that drives
+evolution: until the items below are addressed, the loop should be run with a
+human reviewing each adoption rather than fully unattended, because the fitness
+signal is not yet strong enough to prevent drift or overfitting.
+
+### 1. The fitness function is statistically underpowered and overfittable
+
+The evolver adopts a change only when the benchmark "proves" it helps — but the
+benchmark can't prove much yet:
+
+- **Only 3 tasks, run once each**, so `success_rate ∈ {0, 0.33, 0.67, 1.0}`.
+- `adopt_epsilon = 0.03` is meant to guard against a single-task fluke, but the
+  smallest possible improvement (one task flipping) is `0.333` — ~10× the
+  threshold, so the margin guard is effectively inert.
+- **No repeated trials / no variance estimate.** Active and candidate are each
+  run once; even at `temperature=0.0` most endpoints are nondeterministic, so a
+  truly-equal candidate can win on noise — and with `--commit` that noise is
+  written to git history as "evolution."
+- **No held-out split.** The prompt is tuned against the exact tasks it is
+  scored on (Goodhart): the system can learn to special-case the gate rather
+  than improve generally.
+
+  *Direction:* many more tasks; `N` repeated trials per task with mean ± stderr;
+  a DECIDE rule based on a significance test / confidence interval rather than a
+  flat epsilon on a 3-point scale; and a **dev set** (drives PROPOSE) separate
+  from a **held-out set** (gates ADOPT) so overfitting is detected, not rewarded.
+
+### 2. The evaluation gate is contaminated by the live memory store
+
+`run_task` (`benchmark/runner.py`) deep-copies the config but leaves
+`memory.enabled` and `memory.store_path` untouched, so every benchmark run both
+**reads (retrieve/inject) and writes** into the same shared `memory/` store.
+This means:
+
+- **Confounded A/B:** the active version runs first and writes episodes; the
+  candidate then runs the identical tasks and retrieves what the active run just
+  wrote — they are not evaluated under identical state.
+- **Train/test leakage:** the held-out benchmark tasks land permanently in the
+  experience store that live runs retrieve from and that `diagnose()` reads next
+  cycle — the agent ends up "learning from" the tasks it is graded on.
+
+  *Direction:* run the benchmark/evaluation against an **isolated, disabled, or
+  frozen-snapshot** memory store (e.g. force `memory.enabled=False` or a per-eval
+  temp `store_path`); if A/B-ing *with* memory, snapshot once and restore between
+  active and candidate. Benchmark tasks must never enter the learning store.
+
+### 3. Full system-prompt replacement is the least-guarded self-modification path
+
+The structural whitelist makes sandbox/timeouts/tool-code unreachable, but
+`prompt_text` can be **wholesale replaced**, validated only as a non-empty string
+under 20k chars (`policy/patch.py`). The system prompt is where the agent's
+behavioral and safety contract lives, yet a candidate that silently drops a
+safety rule or rewrites the whole prompt is gated only by the weak, contaminated
+signal above — and can then be auto-committed to git. "Prefer minimal edits" is
+advisory proposer text, not enforced.
+
+  *Direction:* treat prompt edits as privileged — bound the **diff size** (reject
+  wholesale rewrites), assert a set of **pinned invariant clauses** (safety rules,
+  the `task_done`/test-pass contract) survive every patch, require the stronger
+  held-out + repeated-trial evidence before an *auto-commit*, and keep a
+  human-in-the-loop checkpoint (or auto-revert on next-cycle regression) for
+  prompt changes specifically — even while numeric-knob changes adopt
+  automatically.
+
 ## Install
 
 ```bash
