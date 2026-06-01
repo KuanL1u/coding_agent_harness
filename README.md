@@ -1,11 +1,33 @@
 # coding_harness
 
-A small, from-scratch **autonomous coding agent** built on the `openai` SDK and
-the Python standard library — no LangChain, no heavy frameworks.
+A from-scratch **autonomous coding agent** built on the `openai` SDK and the
+Python standard library — no LangChain, no heavy frameworks.
 
-It runs a **ReAct loop** (reason → act → observe → repeat) using **native
-OpenAI-compatible function/tool calling**, executes tools locally inside a
-confined workspace, and writes a structured trace of everything it does.
+**North star:** a coding agent harness that *self-evolves* — one that learns
+from its own runs, measures whether a change actually helps on a held-out
+benchmark, and then safely rewrites its own prompt, policy, and (eventually)
+toolset to get better over time, without a human editing the agent by hand.
+
+The repo builds toward that goal in layers, each safe and useful on its own:
+
+1. **A solid base agent** — a budgeted ReAct loop over native tool calling,
+   confined to a sandboxed workspace (shipped, see below).
+2. **Experience / memory** — distil every run into an episode and inject the
+   most relevant past experience into future runs (shipped).
+3. **An evaluation gate** — a held-out benchmark that gives a *relative* signal
+   for whether a change helped (shipped).
+4. **A prompt/policy evolver** — propose, benchmark, and adopt prompt/policy
+   edits that beat the active version, gated by structural safety rails
+   (shipped; runs offline and human-reviewed).
+5. **A pluggable, self-extending toolset** — tools discovered at runtime, with a
+   roadmap to letting the agent author new tools behind a PR gate (registry
+   shipped; the self-extension loop is not built yet).
+
+The base agent runs a **ReAct loop** (reason → act → observe → repeat) using
+**native OpenAI-compatible function/tool calling**, executes tools locally
+inside a confined workspace, and writes a structured trace of everything it
+does. Everything beyond the base agent is **off by default** and never sits in
+the live task path unless explicitly enabled.
 
 ## How it works
 
@@ -325,7 +347,7 @@ Edit `config.yaml` (string values support `${ENV_VAR}` expansion):
 llm:
   base_url: ${OPENAI_BASE_URL}
   api_key: ${OPENAI_API_KEY}
-  model: gpt-4o-mini
+  model: llama-3.3-70b-versatile
   temperature: 0.0
   max_tokens: 2048
   parallel_tool_calls: true
@@ -338,30 +360,42 @@ sandbox:
   command_timeout_s: 60.0
   max_output_bytes: 16000
   dry_run: false
-  deny_patterns: ['\brm\s+-rf\s+/', '\bmkfs\b']
+  deny_patterns:               # also includes a fork-bomb pattern by default
+    - '\brm\s+-rf\s+/'
+    - '\bmkfs\b'
+    - '\bshutdown\b'
+    - '\breboot\b'
 logging:
   trace_file: runs/trace.jsonl
   console: true
-memory:
+memory:                        # experience layer (safe to leave on)
   enabled: true
   store_path: memory
-  embedding_model: local      # or a remote model name, e.g. text-embedding-3-small
+  embedding_model: local       # or a remote model name, e.g. text-embedding-3-small
+  # embedding_base_url / embedding_api_key default to the llm.* values above
   retrieve_k_episodes: 3
   retrieve_k_playbooks: 2
   inject_token_budget: 800
   distill_every_n_episodes: 25
-evolve:                       # prompt/policy self-tuning (off by default)
+  # similarity_floor: 0.15     # episodes below this cosine similarity are never injected
+evolve:                        # prompt/policy self-tuning (off by default)
   enabled: false
+  active_policy_version: ""    # empty -> use the registry's active pointer
   policy_dir: policy
-  adopt_epsilon: 0.03         # require +3% benchmark success to adopt
-  max_cost_regression: 0.10   # reject if >10% more tokens/steps
-  cycle_budget_tokens: 2000000
-tool_evolution:               # pluggable tools + tool self-extension
-  enabled: false              # gates the self-extension loop; registry is always pluggable
-  require_approval: true      # a new tool only activates by merging a PR (v1 default)
-  plugins_dir: ""             # empty -> packaged coding_harness/tools/plugins
-  gap_evidence_threshold: 0.25
+  max_candidates_per_cycle: 4
+  adopt_epsilon: 0.03          # require +3% benchmark success to adopt
+  max_cost_regression: 0.10    # reject if >10% more tokens/steps
+  cycle_budget_tokens: 2000000 # hard per-cycle token ceiling
+tool_evolution:                # pluggable tools + tool self-extension
+  enabled: false               # gates the self-extension loop; registry is always pluggable
+  require_approval: true       # a new tool only activates by merging a PR (v1 default)
+  plugins_dir: ""              # empty -> packaged coding_harness/tools/plugins
+  staging_dir: ""              # quarantine for proposed-but-unvalidated tools
+  cadence: manual              # manual | nightly | every_n_runs (advisory; no scheduler yet)
   max_new_tools_per_cycle: 2
+  gap_evidence_threshold: 0.25 # a gap must recur in >=25% of recent runs to mint a tool
+  run_benchmark_ab: true
+  github_repo: ""              # owner/repo a tool-proposal PR is opened against
 ```
 
 ## Project layout
