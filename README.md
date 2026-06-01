@@ -146,6 +146,13 @@ benchmark. Out-of-range values are rejected too. A hard per-cycle token ceiling
 bounds cost, the cycle runs offline (never in the live task path), and every
 adoption is a revertible registry/git change.
 
+> **Not built yet:** the evolution cycle currently runs only when invoked
+> manually (the CLI above). **Scheduled cadence (L3-M5)** — running the cycle
+> automatically on a cron-style schedule or after every *K* live runs — and the
+> **success-rate-over-versions dashboards** are not implemented. The `cadence` /
+> `every_n_runs` config fields are accepted but are advisory metadata only; no
+> scheduler reads them yet.
+
 ## Install
 
 ```bash
