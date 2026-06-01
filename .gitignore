@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Run traces (keep the directory, ignore contents)
+runs/*
+!runs/.gitkeep
+
+# Agent workspace contents (keep the directory, ignore contents)
+workspace/*
+!workspace/.gitkeep
+
+# Local config overrides
+config.local.yaml
+.env

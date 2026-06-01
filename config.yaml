@@ -1,0 +1,34 @@
+# Sample configuration for the coding agent harness.
+# String values support ${ENV_VAR} expansion, so secrets stay out of this file.
+
+llm:
+  # Point this at any OpenAI-compatible endpoint:
+  #   OpenAI:  https://api.openai.com/v1
+  #   vLLM:    http://localhost:8000/v1
+  #   SGLang:  http://localhost:30000/v1
+  base_url: ${OPENAI_BASE_URL}
+  api_key: ${OPENAI_API_KEY}
+  model: gpt-4o-mini
+  temperature: 0.0
+  max_tokens: 2048
+  parallel_tool_calls: true
+  request_timeout: 120.0
+
+loop:
+  max_steps: 30
+  max_total_tokens: 200000
+
+sandbox:
+  workspace_root: workspace
+  command_timeout_s: 60.0
+  max_output_bytes: 16000
+  dry_run: false
+  deny_patterns:
+    - '\brm\s+-rf\s+/'
+    - '\bmkfs\b'
+    - '\bshutdown\b'
+    - '\breboot\b'
+
+logging:
+  trace_file: runs/trace.jsonl
+  console: true
