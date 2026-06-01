@@ -106,3 +106,34 @@ def test_empty_choices_raises_after_exhausting_retries():
     with pytest.raises(EmptyResponseError):
         client.complete([{"role": "user", "content": "hi"}])
     assert completions.calls == 3  # initial try + 2 retries
+
+
+def test_retries_emit_observability_events():
+    good = _FakeResponse([_FakeChoice(_FakeMessage(content="recovered"))])
+    completions = _FakeCompletions(scripted=[_FakeResponse([]), _FakeResponse([]), good])
+    events: list[tuple[str, dict]] = []
+    client = _client(completions, base_backoff=0.0)
+    client.event_hook = lambda event, fields: events.append((event, fields))
+
+    client.complete([{"role": "user", "content": "hi"}])
+
+    # One retry event per backoff (two empty responses), no terminal error.
+    retries = [f for e, f in events if e == "llm_retry"]
+    assert [f["attempt"] for f in retries] == [1, 2]
+    assert all(f["error_type"] == "EmptyResponseError" for f in retries)
+    assert not any(e == "llm_error" for e, _ in events)
+
+
+def test_exhausted_retries_emit_llm_error_event():
+    completions = _FakeCompletions(scripted=[_FakeResponse([])])
+    events: list[tuple[str, dict]] = []
+    client = _client(completions, max_retries=2, base_backoff=0.0)
+    client.event_hook = lambda event, fields: events.append((event, fields))
+
+    with pytest.raises(EmptyResponseError):
+        client.complete([{"role": "user", "content": "hi"}])
+
+    errors = [f for e, f in events if e == "llm_error"]
+    assert len(errors) == 1
+    assert errors[0]["error_type"] == "EmptyResponseError"
+    assert errors[0]["attempts"] == 3  # initial try + 2 retries

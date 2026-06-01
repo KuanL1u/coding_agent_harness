@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
+
 from coding_harness.agent import Agent
 from coding_harness.config import Config
 from coding_harness.llm_client import Usage
@@ -169,7 +171,42 @@ def test_trace_file_written(tmp_path):
     agent.run("finish immediately")
 
     trace = (tmp_path / "trace.jsonl").read_text().strip().splitlines()
-    events = [json.loads(line)["event"] for line in trace]
+    records = [json.loads(line) for line in trace]
+    events = [r["event"] for r in records]
+    assert "run_start" in events
     assert "llm_request" in events
     assert "assistant_message" in events
     assert "loop_end" in events
+    # Every record carries the run id, and run_start is the first event.
+    run_ids = {r["run_id"] for r in records}
+    assert len(run_ids) == 1
+    assert records[0]["event"] == "run_start"
+
+
+@dataclass
+class RaisingLLM:
+    """An LLM stand-in that raises, simulating an exhausted-retry crash."""
+
+    usage: Usage = field(default_factory=Usage)
+
+    def complete(self, messages, tools=None, tool_choice="auto"):
+        raise RuntimeError("boom")
+
+
+def test_crash_is_recorded_as_error_not_max_steps(tmp_path):
+    cfg = _config(tmp_path)
+    agent = Agent.create(cfg, llm=RaisingLLM())
+
+    with pytest.raises(RuntimeError, match="boom"):
+        agent.run("trigger a crash")
+
+    trace = (tmp_path / "trace.jsonl").read_text().strip().splitlines()
+    records = [json.loads(line) for line in trace]
+    by_event = {r["event"]: r for r in records}
+
+    # A distinct error event with a traceback is recorded...
+    assert "error" in by_event
+    assert by_event["error"]["error_type"] == "RuntimeError"
+    assert "boom" in by_event["error"]["traceback"]
+    # ...and loop_end reflects the crash rather than mislabeling it max_steps.
+    assert by_event["loop_end"]["status"] == "error"

@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from openai import APIConnectionError, APIStatusError, RateLimitError
 from openai import OpenAI
@@ -57,6 +57,13 @@ class LLMClient:
     base_backoff: float = 1.0
     _client: Any = None
     usage: Usage = field(default_factory=Usage)
+    # Optional sink for observability events (e.g. EventLogger.log). Called as
+    # ``event_hook(event_type, fields_dict)``; left unset in tests.
+    event_hook: Callable[[str, dict[str, Any]], None] | None = None
+
+    def _emit(self, event: str, **fields: Any) -> None:
+        if self.event_hook is not None:
+            self.event_hook(event, fields)
 
     @classmethod
     def from_config(cls, cfg: Any) -> "LLMClient":
@@ -135,7 +142,23 @@ class LLMClient:
             # Exponential backoff with full jitter.
             sleep = self.base_backoff * (2 ** attempt)
             sleep = random.uniform(0, sleep)
+            self._emit(
+                "llm_retry",
+                attempt=attempt + 1,
+                max_retries=self.max_retries,
+                error_type=type(last_exc).__name__,
+                error=str(last_exc),
+                sleep_s=round(sleep, 3),
+            )
             time.sleep(sleep)
 
         assert last_exc is not None
+        # Retries exhausted: record the terminal failure before propagating so
+        # the trace shows why the run died rather than only a raw traceback.
+        self._emit(
+            "llm_error",
+            error_type=type(last_exc).__name__,
+            error=str(last_exc),
+            attempts=self.max_retries + 1,
+        )
         raise last_exc
