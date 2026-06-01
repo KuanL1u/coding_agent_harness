@@ -33,6 +33,11 @@ def build_file_tools(jail: WorkspaceJail, max_output_bytes: int) -> list[Tool]:
         lines = resolved.read_text(encoding="utf-8", errors="replace").splitlines()
         total = len(lines)
 
+        # A legitimately empty file is a successful (empty) read, not an error.
+        if total == 0:
+            header = f"{jail.relative(resolved)} (0 lines)"
+            return ToolResult(content=_clip(header, max_output_bytes))
+
         # 1-based, inclusive line range. Defaults read the whole file.
         lo = (start_line - 1) if start_line else 0
         hi = end_line if end_line else total

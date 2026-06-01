@@ -16,6 +16,14 @@ from openai import APIConnectionError, APIStatusError, RateLimitError
 from openai import OpenAI
 
 
+class EmptyResponseError(RuntimeError):
+    """Raised when the server returns a 200 with no usable choices.
+
+    Treated as a transient/retryable condition: some OpenAI-compatible servers
+    occasionally return an empty ``choices`` list, and a retry usually succeeds.
+    """
+
+
 @dataclass
 class Usage:
     """Cumulative token accounting across all requests."""
@@ -86,9 +94,12 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
-            # Only forward parallel_tool_calls when tools are present; some
-            # servers reject the param otherwise.
-            kwargs["parallel_tool_calls"] = self.parallel_tool_calls
+            # Only forward parallel_tool_calls when explicitly enabled. Many
+            # OpenAI-compatible servers (Ollama, vLLM, SGLang) reject the param
+            # outright — even with value false — so when it is disabled we omit
+            # it entirely and let the server fall back to its own default.
+            if self.parallel_tool_calls:
+                kwargs["parallel_tool_calls"] = True
 
         response = self._request_with_retry(kwargs)
 
@@ -105,8 +116,13 @@ class LLMClient:
         last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                return self._client.chat.completions.create(**kwargs)
-            except (RateLimitError, APIConnectionError) as exc:
+                response = self._client.chat.completions.create(**kwargs)
+                if not getattr(response, "choices", None):
+                    # 200 with an empty choices list: retry rather than letting
+                    # a downstream ``choices[0]`` raise an opaque IndexError.
+                    raise EmptyResponseError("LLM response contained no choices")
+                return response
+            except (RateLimitError, APIConnectionError, EmptyResponseError) as exc:
                 last_exc = exc
             except APIStatusError as exc:
                 # Retry only on server-side (5xx) errors; client errors are fatal.

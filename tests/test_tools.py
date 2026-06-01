@@ -74,6 +74,14 @@ def test_read_file_line_range(jail, tmp_path):
     assert "l4" not in result.content
 
 
+def test_read_file_empty_file_is_not_an_error(jail, tmp_path):
+    (tmp_path / "empty.txt").write_text("")
+    read = {t.name: t for t in build_file_tools(jail, 10_000)}["read_file"]
+    result = read.func(path="empty.txt")
+    assert not result.is_error
+    assert "0 lines" in result.content
+
+
 def test_schema_has_strict_shape(registry):
     schema = registry.get("edit_file").schema()
     params = schema["function"]["parameters"]
