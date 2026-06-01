@@ -14,6 +14,13 @@ runs/*
 workspace/*
 !workspace/.gitkeep
 
+# Experience / memory store (Layer 1) — accumulated run history is local state
+memory/
+
+# Rejected-candidate audit artifacts (Layer 3). Adopted version files under
+# policy/ are meant to be committed; the archive is local audit noise.
+policy/archive/
+
 # Local config overrides
 config.local.yaml
 .env

@@ -32,3 +32,31 @@ sandbox:
 logging:
   trace_file: runs/trace.jsonl
   console: true
+
+memory:
+  # Experience layer: persist a record of every run and inject the most
+  # relevant past experience into future runs. Safe to leave on — it only
+  # adds context and never modifies code.
+  enabled: true
+  store_path: memory
+  # "local" / "" -> dependency-free local embedder (works on any endpoint,
+  # including Groq which has no /v1/embeddings). Set to an embedding model
+  # name (e.g. text-embedding-3-small) to use a real embeddings endpoint.
+  embedding_model: local
+  retrieve_k_episodes: 3
+  retrieve_k_playbooks: 2
+  inject_token_budget: 800
+  distill_every_n_episodes: 25
+
+evolve:
+  # Prompt & policy self-tuning (Layer 3). Off by default: when disabled the
+  # agent uses the hardcoded prompt + static config (v1 behaviour). Enable to
+  # make the active, versioned prompt/policy the source of truth and to run the
+  # evolution cycle (python -m coding_harness.evolve.evolver.cycle).
+  enabled: false
+  active_policy_version: ""   # empty -> use the registry's active pointer
+  policy_dir: policy
+  max_candidates_per_cycle: 4
+  adopt_epsilon: 0.03         # require +3% benchmark success to adopt
+  max_cost_regression: 0.10   # reject if >10% more tokens/steps
+  cycle_budget_tokens: 2000000

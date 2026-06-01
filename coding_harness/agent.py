@@ -18,11 +18,18 @@ agent can self-correct instead of crashing.
 
 from __future__ import annotations
 
+import hashlib
 import traceback
 from dataclasses import dataclass
 from typing import Any
 
 from .config import Config
+from .evolve.memory import Memory
+from .evolve.policy import (
+    PromptPolicyRegistry,
+    PromptPolicyVersion,
+    seed_version,
+)
 from .llm_client import LLMClient
 from .logging_ import EventLogger
 from .prompts import SYSTEM_PROMPT
@@ -47,6 +54,75 @@ class RunResult:
     total_tokens: int
     messages: list[dict[str, Any]]
     run_id: str = ""
+    wall_clock_s: float = 0.0
+
+
+def _config_snapshot(
+    config: Config, system_prompt: str, prompt_version: str | None
+) -> dict[str, Any]:
+    """The prompt/config identity stamped on each episode (join key for Layer 3).
+
+    ``prompt_version`` is the active policy version id when Layer 3 is driving,
+    otherwise a short content hash of the system prompt so outcomes can still be
+    attributed to the exact prompt that produced them.
+    """
+    if not prompt_version:
+        prompt_hash = hashlib.blake2b(
+            system_prompt.encode("utf-8"), digest_size=4
+        ).hexdigest()
+        prompt_version = f"p_{prompt_hash}"
+    return {
+        "prompt_version": prompt_version,
+        "max_steps": config.loop.max_steps,
+        "max_total_tokens": config.loop.max_total_tokens,
+        "temperature": config.llm.temperature,
+        "model": config.llm.model,
+    }
+
+
+def _resolve_policy(config: Config) -> PromptPolicyVersion | None:
+    """Load the active prompt/policy version when Layer 3 is enabled.
+
+    Bootstraps an empty registry with a ``p1`` seed built from the current code
+    defaults (so the first enabled run reproduces v1 behaviour exactly). Returns
+    ``None`` when evolution is disabled, leaving the v1 hardcoded path intact.
+    """
+    evolve = getattr(config, "evolve", None)
+    if evolve is None or not evolve.enabled:
+        return None
+    registry = PromptPolicyRegistry(evolve.policy_dir)
+    active = registry.get_active(evolve.active_policy_version)
+    if active is None:
+        active = registry.seed(
+            seed_version(
+                prompt_text=SYSTEM_PROMPT,
+                max_steps=config.loop.max_steps,
+                max_total_tokens=config.loop.max_total_tokens,
+                temperature=config.llm.temperature,
+                parallel_tool_calls=config.llm.parallel_tool_calls,
+            )
+        )
+    return active
+
+
+def _apply_policy(config: Config, policy: PromptPolicyVersion) -> None:
+    """Fold a policy version's tunable knobs into ``config`` (mutates in place).
+
+    Only the whitelisted, non-safety knobs are touched; the prompt and tool
+    descriptions are applied separately by the caller.
+    """
+    config.loop.max_steps = policy.max_steps
+    config.loop.max_total_tokens = policy.max_total_tokens
+    config.llm.temperature = policy.temperature
+    config.llm.parallel_tool_calls = policy.parallel_tool_calls
+
+
+def _apply_tool_descriptions(registry: ToolRegistry, overrides: dict[str, str]) -> None:
+    """Override registered tools' ``description`` fields (never their code)."""
+    for name, description in (overrides or {}).items():
+        tool = registry.get(name)
+        if tool is not None:
+            tool.description = description
 
 
 def build_registry(config: Config, jail: WorkspaceJail, state: TaskState) -> ToolRegistry:
@@ -79,32 +155,84 @@ class Agent:
         logger: EventLogger,
         registry: ToolRegistry,
         state: TaskState,
+        memory: Memory | None = None,
+        system_prompt: str = SYSTEM_PROMPT,
+        policy_version: str | None = None,
     ) -> None:
         self.config = config
         self.llm = llm
         self.logger = logger
         self.registry = registry
         self.state = state
+        self.memory = memory
+        self.system_prompt = system_prompt
+        self.policy_version = policy_version
 
     @classmethod
-    def create(cls, config: Config, llm: LLMClient | None = None) -> "Agent":
-        """Build an agent and all its collaborators from config."""
+    def create(
+        cls,
+        config: Config,
+        llm: LLMClient | None = None,
+        policy: PromptPolicyVersion | None = None,
+    ) -> "Agent":
+        """Build an agent and all its collaborators from config.
+
+        ``policy`` is the active prompt/policy version (Layer 3). When omitted it
+        is loaded from the registry if ``evolve.enabled``; otherwise the harness
+        runs on the hardcoded v1 prompt and static config. An explicit ``policy``
+        always wins — the evolver's gate uses it to A/B a candidate version.
+        """
+        if policy is None:
+            policy = _resolve_policy(config)
+
+        system_prompt = SYSTEM_PROMPT
+        if policy is not None:
+            system_prompt = policy.prompt_text or SYSTEM_PROMPT
+            _apply_policy(config, policy)
+
         jail = WorkspaceJail(config.sandbox.workspace_root)
         state = TaskState()
         registry = build_registry(config, jail, state)
+        if policy is not None and policy.tool_descriptions:
+            _apply_tool_descriptions(registry, policy.tool_descriptions)
+
         logger = EventLogger(config.logging.trace_file, console=config.logging.console)
         llm = llm or LLMClient.from_config(config.llm)
         # Route the client's retry/error events into the same trace as the loop.
         if isinstance(llm, LLMClient):
             llm.event_hook = lambda event, fields: logger.log(event, **fields)
-        return cls(config, llm, logger, registry, state)
+        # The memory layer (Layer 1) is config-gated; ``None`` when disabled.
+        # Its events flow into the same trace as everything else.
+        memory = Memory.from_config(
+            config, on_event=lambda event, fields: logger.log(event, **fields)
+        )
+        return cls(
+            config,
+            llm,
+            logger,
+            registry,
+            state,
+            memory,
+            system_prompt=system_prompt,
+            policy_version=policy.version if policy is not None else None,
+        )
 
     def run(self, task: str) -> RunResult:
         """Execute ``task`` to completion or until a budget is hit."""
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": task},
         ]
+
+        # Layer 1, pre-loop: inject the most relevant past experience as a
+        # leading system message. ``task_embedding`` is reused for the episode
+        # record so the task is only embedded once.
+        task_embedding: list[float] = []
+        if self.memory is not None:
+            experience, task_embedding = self.memory.retrieve(task)
+            if experience:
+                messages.insert(1, {"role": "system", "content": experience})
+
         tools = self.registry.schemas()
 
         self.logger.log(
@@ -118,6 +246,7 @@ class Agent:
             workspace=self.config.sandbox.workspace_root,
             dry_run=self.config.sandbox.dry_run,
             tools=self.registry.names(),
+            policy_version=self.policy_version,
         )
 
         status = "max_steps"
@@ -176,13 +305,31 @@ class Agent:
             )
             raise
         finally:
+            wall_clock_s = self.logger.elapsed()
             self.logger.log(
                 "loop_end",
                 status=status,
                 steps=self.logger.steps,
                 total_tokens=self.llm.usage.total_tokens,
-                elapsed_s=self.logger.elapsed(),
+                elapsed_s=wall_clock_s,
             )
+            # Layer 1, post-loop: persist the episode (and distill on cadence).
+            # Runs even on a crashing/budget-stopped path so the failure is
+            # recorded; the call is internally failure-isolated.
+            if self.memory is not None:
+                self.memory.record(
+                    task,
+                    messages,
+                    status=status,
+                    steps=self.logger.steps,
+                    tokens=self.llm.usage.total_tokens,
+                    wall_clock_s=wall_clock_s,
+                    trace_path=str(self.logger.trace_path),
+                    config_snapshot=_config_snapshot(
+                        self.config, self.system_prompt, self.policy_version
+                    ),
+                    task_embedding=task_embedding,
+                )
             self.logger.close()
 
         return RunResult(
@@ -192,6 +339,7 @@ class Agent:
             total_tokens=self.llm.usage.total_tokens,
             messages=messages,
             run_id=self.logger.run_id,
+            wall_clock_s=wall_clock_s,
         )
 
 

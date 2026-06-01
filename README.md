@@ -64,6 +64,88 @@ All execution is confined by `sandbox.py`:
   refused.
 - **Dry-run** — `--dry-run` echoes commands instead of executing them.
 
+## Experience layer (memory)
+
+The harness can **learn from its own runs**. When `memory.enabled` is set, every
+run is distilled into a structured **episode** (outcome, cost, tools used, a diff
+summary, the test result, and — on failure — a compact failure signature) and
+appended to a local store. At the *start* of each run the incoming task is
+embedded and the most similar past episodes and distilled **playbooks** are
+injected as a short, token-budgeted "Relevant experience" block — so the agent
+benefits from what worked (and what failed) on similar tasks before.
+
+- **Safe by construction**: this layer only *adds context*; it never modifies
+  code or safety config. It is fully failure-isolated — a memory error degrades
+  to "no experience", never a crashed run — and is a no-op when disabled.
+- **No embeddings endpoint required**: `embedding_model: local` (the default)
+  uses a dependency-free local embedder, so memory works against any chat
+  endpoint (including ones with no `/v1/embeddings`). Point it at a real
+  embedding model name to use a remote endpoint instead.
+- **Playbooks**: every `distill_every_n_episodes` runs, clusters of similar
+  successful episodes are distilled into reusable step-by-step playbooks.
+
+Each episode carries a `config_snapshot` (prompt version + budgets + temperature)
+so outcomes can later be attributed to a specific prompt/policy version.
+
+## Evaluation Gate (benchmark)
+
+A small, fixed set of held-out coding tasks plus a runner that scores the harness
+— the reliable *relative* signal used to tell whether a change actually helped.
+
+```bash
+# run the suite (exit 0 only if every task passes)
+python -m coding_harness.evolve.benchmark.runner --config config.yaml
+
+# A/B the experience layer: run the suite with memory OFF then ON
+python -m coding_harness.evolve.benchmark.runner --compare-memory
+```
+
+Each task in `coding_harness/evolve/benchmark/tasks/<name>/` has a `task.md`
+(the instruction), a `setup/` (initial workspace, copied into a fresh isolated
+jail per run), and a self-contained `grade.py` that prints a JSON verdict. The
+tasks, graders, and runner live **outside the agent's writable workspace** — the
+agent can never edit what scores it. The runner reports `success_rate`,
+`avg_steps`, `avg_tokens`, and `avg_wall_clock`.
+
+## Prompt & policy self-tuning (evolver)
+
+The harness can **rewrite its own prompt and policy** when the benchmark proves
+the change helps. A versioned **prompt/policy registry** holds the tunable
+surface — the system prompt, per-tool *descriptions*, loop budgets, temperature,
+and the parallel-call flag — as addressable artifacts with an active pointer.
+When `evolve.enabled` is set, the agent loads the **active version** instead of
+the hardcoded prompt/static config, so the active version is the source of truth.
+
+An offline **evolver** then runs this loop:
+
+```
+DIAGNOSE → PROPOSE → MATERIALIZE → EVALUATE → DECIDE → COMMIT
+```
+
+- **DIAGNOSE** reads the Layer 1 aggregates into a ranked weakness report
+  (premature `task_done`, budget exhaustion, recurring failure signatures, …).
+- **PROPOSE** (an LLM meta-agent, with a deterministic heuristic fallback) emits
+  candidate edits.
+- **EVALUATE** runs the Evaluation Gate: active vs each candidate, head-to-head.
+- **DECIDE** adopts a candidate only if it beats the active version by
+  `adopt_epsilon` **and** stays within the `max_cost_regression` budget.
+- **COMMIT** activates the winner (a new version file + pointer) and, with
+  `--commit`, makes a git commit carrying the benchmark delta; rejected
+  candidates are archived with their reason.
+
+```bash
+python -m coding_harness.evolve.evolver.cycle --config config.yaml
+python -m coding_harness.evolve.evolver.cycle --heuristic   # skip the LLM proposer
+python -m coding_harness.evolve.evolver.cycle --commit      # also git-commit an adoption
+```
+
+**Safety is structural, not advisory.** The evolver's *only* output is a
+whitelisted `PromptPolicyPatch`; there is no representable way for it to touch
+the sandbox, deny-list, timeouts, workspace root, tool execution code, or the
+benchmark. Out-of-range values are rejected too. A hard per-cycle token ceiling
+bounds cost, the cycle runs offline (never in the live task path), and every
+adoption is a revertible registry/git change.
+
 ## Install
 
 ```bash
@@ -146,6 +228,20 @@ sandbox:
 logging:
   trace_file: runs/trace.jsonl
   console: true
+memory:
+  enabled: true
+  store_path: memory
+  embedding_model: local      # or a remote model name, e.g. text-embedding-3-small
+  retrieve_k_episodes: 3
+  retrieve_k_playbooks: 2
+  inject_token_budget: 800
+  distill_every_n_episodes: 25
+evolve:                       # Layer 3: prompt/policy self-tuning (off by default)
+  enabled: false
+  policy_dir: policy
+  adopt_epsilon: 0.03         # require +3% benchmark success to adopt
+  max_cost_regression: 0.10   # reject if >10% more tokens/steps
+  cycle_budget_tokens: 2000000
 ```
 
 ## Project layout
@@ -160,6 +256,12 @@ coding_harness/
   prompts.py      # system prompt
   sandbox.py      # WorkspaceJail + safe subprocess execution
   tools/          # base registry + file/search/exec/control tools
+  evolve/
+    memory/       # Layer 1: experience store, episodes, embeddings,
+                  #   retrieval/injection, distiller (playbooks)
+    benchmark/    # Evaluation Gate: held-out tasks/ + runner.py
+    policy/       # Layer 3: versioned prompt/policy registry + whitelisted patch
+    evolver/      # Layer 3: diagnose / propose / evaluate / decide / cycle
 tests/            # pytest unit tests for the harness
 config.yaml       # sample config
 ```
