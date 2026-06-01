@@ -8,7 +8,7 @@ llm:
   #   SGLang:  http://localhost:30000/v1
   base_url: ${OPENAI_BASE_URL}
   api_key: ${OPENAI_API_KEY}
-  model: gpt-4o-mini
+  model: llama-3.3-70b-versatile
   temperature: 0.0
   max_tokens: 2048
   parallel_tool_calls: true
