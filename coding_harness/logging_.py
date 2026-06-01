@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -25,10 +26,18 @@ def _preview(text: str | None, limit: int = 500) -> str:
 class EventLogger:
     """Append-only JSONL trace with a console mirror and run counters."""
 
-    def __init__(self, trace_file: str | Path, console: bool = True) -> None:
+    def __init__(
+        self,
+        trace_file: str | Path,
+        console: bool = True,
+        run_id: str | None = None,
+    ) -> None:
         self.trace_path = Path(trace_file)
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         self.console = console
+        # A short identifier stamped on every record so the events of one run
+        # can be isolated even when many runs share the same append-only file.
+        self.run_id = run_id or uuid.uuid4().hex[:8]
         self._fh: TextIO = self.trace_path.open("a", encoding="utf-8")
 
         self.start_time = time.time()
@@ -41,6 +50,7 @@ class EventLogger:
         """Write one event to the trace and (optionally) mirror to console."""
         record = {
             "ts": round(time.time() - self.start_time, 3),
+            "run_id": self.run_id,
             "event": event_type,
             **fields,
         }
@@ -50,8 +60,28 @@ class EventLogger:
             self._mirror(event_type, fields)
 
     def _mirror(self, event_type: str, fields: dict[str, Any]) -> None:
-        if event_type == "llm_request":
+        if event_type == "run_start":
+            print(
+                f"[run {fields.get('run_id')}] model={fields.get('model')} "
+                f"task: {_preview(fields.get('task'), 160)}"
+            )
+        elif event_type == "llm_request":
             print(f"[step {fields.get('step')}] -> LLM ({fields.get('num_messages')} msgs)")
+        elif event_type == "llm_retry":
+            print(
+                f"  [retry {fields.get('attempt')}/{fields.get('max_retries')}] "
+                f"{fields.get('error_type')}: backing off {fields.get('sleep_s')}s"
+            )
+        elif event_type == "llm_error":
+            print(
+                f"  [llm error] {fields.get('error_type')}: {_preview(fields.get('error'), 300)} "
+                f"(after {fields.get('attempts')} attempts)"
+            )
+        elif event_type == "error":
+            print(
+                f"  [run error] {fields.get('error_type')}: "
+                f"{_preview(fields.get('message'), 300)}"
+            )
         elif event_type == "assistant_message":
             thought = _preview(fields.get("content"))
             if thought:

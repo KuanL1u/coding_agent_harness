@@ -104,9 +104,22 @@ Requires Python 3.10+.
        --dry-run
    ```
 
-The full event trace is written as JSON Lines to `runs/trace.jsonl` (one object
-per `llm_request`, `assistant_message`, `tool_call`, `tool_result`, and
-`loop_end` event), with a compact mirror printed to the console.
+The full event trace is written as JSON Lines to `runs/trace.jsonl`, with a
+compact mirror printed to the console. Every record carries a `run_id` and an
+elapsed-time `ts`, so a single run's events can be isolated even though runs
+share the append-only file (e.g. `jq 'select(.run_id=="abc12345")'`). The run
+id is also printed in the final summary. Event types:
+
+- `run_start` — task, model, base URL, budgets, workspace, and tool list.
+- `llm_request` / `assistant_message` — one request/response pair per step.
+- `llm_retry` / `llm_error` — each backoff attempt, and the terminal failure
+  after retries are exhausted.
+- `tool_call` / `tool_result` — each dispatched tool and its observation
+  (`is_error` flags recoverable tool failures).
+- `error` — an uncaught crash (e.g. exhausted LLM retries), with a traceback;
+  distinct from hitting a step/token budget.
+- `loop_end` — final `status` (`done` | `answered` | `max_steps` |
+  `max_tokens` | `error`), step count, tokens, and elapsed time.
 
 ## Configuration
 

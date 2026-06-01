@@ -60,13 +60,21 @@ def apply_overrides(config: Config, args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = Config.load(args.config)
-    apply_overrides(config, args)
+    try:
+        config = Config.load(args.config)
+        apply_overrides(config, args)
 
-    agent = Agent.create(config)
-    result = agent.run(args.task)
+        agent = Agent.create(config)
+        result = agent.run(args.task)
+    except Exception as exc:
+        # Surface a clean, structured error rather than a raw traceback. The
+        # full traceback (when inside the loop) is already in the trace file.
+        print(f"\nERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("See the trace file for details.", file=sys.stderr)
+        return 2
 
     print("\n" + "=" * 60)
+    print(f"run id : {result.run_id}")
     print(f"status : {result.status}")
     print(f"steps  : {result.steps}")
     print(f"tokens : {result.total_tokens}")

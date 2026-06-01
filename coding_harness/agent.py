@@ -18,6 +18,7 @@ agent can self-correct instead of crashing.
 
 from __future__ import annotations
 
+import traceback
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,11 +41,12 @@ from .tools import (
 class RunResult:
     """Outcome of an agent run."""
 
-    status: str  # "done" | "max_steps" | "max_tokens" | "answered"
+    status: str  # "done" | "max_steps" | "max_tokens" | "answered" | "error"
     summary: str
     steps: int
     total_tokens: int
     messages: list[dict[str, Any]]
+    run_id: str = ""
 
 
 def build_registry(config: Config, jail: WorkspaceJail, state: TaskState) -> ToolRegistry:
@@ -92,6 +94,9 @@ class Agent:
         registry = build_registry(config, jail, state)
         logger = EventLogger(config.logging.trace_file, console=config.logging.console)
         llm = llm or LLMClient.from_config(config.llm)
+        # Route the client's retry/error events into the same trace as the loop.
+        if isinstance(llm, LLMClient):
+            llm.event_hook = lambda event, fields: logger.log(event, **fields)
         return cls(config, llm, logger, registry, state)
 
     def run(self, task: str) -> RunResult:
@@ -101,6 +106,19 @@ class Agent:
             {"role": "user", "content": task},
         ]
         tools = self.registry.schemas()
+
+        self.logger.log(
+            "run_start",
+            run_id=self.logger.run_id,
+            task=task,
+            model=self.config.llm.model,
+            base_url=self.config.llm.base_url,
+            max_steps=self.config.loop.max_steps,
+            max_total_tokens=self.config.loop.max_total_tokens,
+            workspace=self.config.sandbox.workspace_root,
+            dry_run=self.config.sandbox.dry_run,
+            tools=self.registry.names(),
+        )
 
         status = "max_steps"
         try:
@@ -145,6 +163,18 @@ class Agent:
                 if self.llm.usage.total_tokens >= self.config.loop.max_total_tokens:
                     status = "max_tokens"
                     break
+        except Exception as exc:
+            # Anything that escapes the loop (e.g. exhausted LLM retries) is a
+            # crash, not a budget exhaustion. Record it distinctly with a
+            # traceback so the trace never mislabels it as ``max_steps``.
+            status = "error"
+            self.logger.log(
+                "error",
+                error_type=type(exc).__name__,
+                message=str(exc),
+                traceback=traceback.format_exc(),
+            )
+            raise
         finally:
             self.logger.log(
                 "loop_end",
@@ -161,6 +191,7 @@ class Agent:
             steps=self.logger.steps,
             total_tokens=self.llm.usage.total_tokens,
             messages=messages,
+            run_id=self.logger.run_id,
         )
 
 
