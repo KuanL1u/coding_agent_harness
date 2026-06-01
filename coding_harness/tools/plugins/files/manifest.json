@@ -1,0 +1,13 @@
+{
+  "name": "files",
+  "version": 1,
+  "author": "builtin",
+  "status": "active",
+  "load_priority": 10,
+  "provides": ["read_file", "write_file", "edit_file", "list_dir"],
+  "created_from_episodes": [],
+  "gap_signal": "",
+  "created_at": "2026-05-31",
+  "approved_by_pr": "",
+  "benchmark_delta": {}
+}

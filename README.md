@@ -50,6 +50,45 @@ system prompt + task
 | `run_tests` | Run `pytest` |
 | `task_done` | Signal successful completion |
 
+## Pluggable tool registry (Layer 4 / PT-M1)
+
+Tools are **discovered at runtime from a directory**, not hardcoded at import.
+Every tool — built-in or (later) agent-authored — lives as a self-describing
+plugin folder under `coding_harness/tools/plugins/`:
+
+```
+plugins/<name>/
+  tool.py        # exposes build(ctx) -> Tool | list[Tool]
+  manifest.json  # metadata + lifecycle status ("staged" | "active" | "disabled")
+  test_tool.py   # unit tests the validation gate runs (PT-M2)
+```
+
+At startup `PluginLoader` scans that directory, loads only plugins whose
+manifest `status == "active"`, calls each plugin's `build(ctx)` with a sandboxed
+**`ToolContext`**, validates every produced tool's schema, and registers the
+survivors. The built-ins (`files`, `search`, `exec`, `control`) are migrated
+into this same layout and pin a `load_priority`, so the tool list keeps its v1
+order and **runs are behaviourally identical** — the agent loop is unchanged
+(`registry.schemas()` / `registry.dispatch()`).
+
+- **`ToolContext` is the only capability surface.** A plugin's `build(ctx)`
+  receives `ctx.jail` (the `WorkspaceJail`), `ctx.run_subprocess` (the
+  deny-listed, timed, truncated, dry-run-aware runner), and `ctx.config` (a
+  read-only view). A tool inherits all v1 safety automatically and has no
+  privileged path to bypass it.
+- **Discovery is failure-isolated.** A bad manifest, an import error, a build
+  error, a malformed schema, or a duplicate tool name rejects only that one
+  plugin (recorded and emitted as a `plugin_rejected` event) — it never aborts
+  the load. A clean built-in load emits nothing, so a normal run's trace is
+  unchanged.
+
+> This is PT-M1 of the tool self-extension plan: the registry is now pluggable
+> and reusable for manual tool additions. The memory-driven loop that *proposes*
+> new tools (gap detection → propose → stage → validate → open PR), the staging
+> quarantine, and the forbidden-import scan are **not built yet** (PT-M2+). The
+> `tool_evolution.enabled` flag gates that loop and is off by default; new tools
+> will only ever activate by merging a human-reviewed pull request.
+
 ## Safety
 
 All execution is confined by `sandbox.py`:
@@ -317,6 +356,12 @@ evolve:                       # Layer 3: prompt/policy self-tuning (off by defau
   adopt_epsilon: 0.03         # require +3% benchmark success to adopt
   max_cost_regression: 0.10   # reject if >10% more tokens/steps
   cycle_budget_tokens: 2000000
+tool_evolution:               # Layer 4: pluggable tools + tool self-extension
+  enabled: false              # gates the self-extension LOOP (PT-M2+); registry is always pluggable
+  require_approval: true      # a new tool only activates by merging a PR (v1 default)
+  plugins_dir: ""             # empty -> packaged coding_harness/tools/plugins
+  gap_evidence_threshold: 0.25
+  max_new_tools_per_cycle: 2
 ```
 
 ## Project layout
@@ -330,7 +375,10 @@ coding_harness/
   logging_.py     # JSONL event trace + console mirror
   prompts.py      # system prompt
   sandbox.py      # WorkspaceJail + safe subprocess execution
-  tools/          # base registry + file/search/exec/control tools
+  tools/          # base registry, ToolContext, PluginLoader
+    files.py search.py exec.py control.py   # built-in tool implementations
+    plugins/      # discovery root: one self-describing folder per tool/group
+      files/ search/ exec/ control/         # built-ins (author:"builtin")
   evolve/
     memory/       # Layer 1: experience store, episodes, embeddings,
                   #   retrieval/injection, distiller (playbooks)
