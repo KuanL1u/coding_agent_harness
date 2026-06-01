@@ -60,3 +60,19 @@ evolve:
   adopt_epsilon: 0.03         # require +3% benchmark success to adopt
   max_cost_regression: 0.10   # reject if >10% more tokens/steps
   cycle_budget_tokens: 2000000
+
+tool_evolution:
+  # Pluggable tools & memory-driven tool self-extension (Layer 4).
+  # The pluggable registry (PT-M1) is always on: tools are discovered at runtime
+  # from plugins_dir, with the built-ins loaded the same way an agent-authored
+  # tool would be. 'enabled' gates the self-extension LOOP (gap detection ->
+  # propose -> stage -> validate -> open PR), which is not built yet (PT-M2+).
+  enabled: false
+  require_approval: true       # a new tool only activates by merging a PR (v1 default)
+  plugins_dir: ""              # empty -> packaged coding_harness/tools/plugins
+  staging_dir: ""              # quarantine for proposed-but-unvalidated tools (PT-M2+)
+  cadence: manual              # manual | nightly | every_n_runs
+  max_new_tools_per_cycle: 2
+  gap_evidence_threshold: 0.25 # a gap must recur in >=25% of recent runs to mint a tool
+  run_benchmark_ab: true
+  github_repo: ""              # owner/repo the PR is opened against (PT-M4)

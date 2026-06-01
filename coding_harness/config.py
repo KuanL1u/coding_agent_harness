@@ -124,6 +124,36 @@ class EvolveConfig:
 
 
 @dataclass
+class ToolEvolutionConfig:
+    """Pluggable tools & memory-driven tool self-extension (Layer 4).
+
+    PT-M1 (shipped): tools are discovered at runtime from ``plugins_dir`` by the
+    :class:`~coding_harness.tools.loader.PluginLoader`, replacing import-time
+    registration. This is always on and behaviourally identical to v1 — the
+    built-in tools live under ``plugins_dir`` and are loaded the same way an
+    agent-authored tool would be.
+
+    ``enabled`` gates the *self-extension loop* (gap detection -> propose ->
+    stage -> validate -> open PR), which is not built yet (PT-M2+). The
+    remaining fields are its advisory configuration. ``require_approval`` is the
+    chosen v1 activation model: a new tool only becomes ``active`` by merging a
+    pull request; there is no automated path to activation.
+    """
+
+    enabled: bool = False
+    require_approval: bool = True
+    # Empty -> the packaged built-in plugins dir (coding_harness/tools/plugins).
+    plugins_dir: str = ""
+    staging_dir: str = ""
+    cadence: str = "manual"   # "manual" | "nightly" | "every_n_runs"
+    every_n_runs: int = 0
+    max_new_tools_per_cycle: int = 2
+    gap_evidence_threshold: float = 0.25  # gap must recur in >=25% of recent runs
+    run_benchmark_ab: bool = True
+    github_repo: str = ""
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     loop: LoopConfig = field(default_factory=LoopConfig)
@@ -131,6 +161,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     evolve: EvolveConfig = field(default_factory=EvolveConfig)
+    tool_evolution: ToolEvolutionConfig = field(default_factory=ToolEvolutionConfig)
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":
@@ -156,6 +187,7 @@ class Config:
             logging=_build(LoggingConfig, data.get("logging", {})),
             memory=_build(MemoryConfig, data.get("memory", {})),
             evolve=_build(EvolveConfig, data.get("evolve", {})),
+            tool_evolution=_build(ToolEvolutionConfig, data.get("tool_evolution", {})),
         )
 
 

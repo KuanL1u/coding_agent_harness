@@ -35,12 +35,11 @@ from .logging_ import EventLogger
 from .prompts import SYSTEM_PROMPT
 from .sandbox import WorkspaceJail
 from .tools import (
+    PluginLoader,
     TaskState,
     ToolRegistry,
-    build_control_tools,
-    build_exec_tools,
-    build_file_tools,
-    build_search_tools,
+    default_plugins_dir,
+    make_tool_context,
 )
 
 
@@ -125,24 +124,35 @@ def _apply_tool_descriptions(registry: ToolRegistry, overrides: dict[str, str]) 
             tool.description = description
 
 
-def build_registry(config: Config, jail: WorkspaceJail, state: TaskState) -> ToolRegistry:
-    """Assemble the full v1 tool set into a registry."""
-    registry = ToolRegistry()
-    tools = (
-        build_file_tools(jail, config.sandbox.max_output_bytes)
-        + build_search_tools(jail, config.sandbox.max_output_bytes)
-        + build_exec_tools(
-            jail,
-            command_timeout_s=config.sandbox.command_timeout_s,
-            max_output_bytes=config.sandbox.max_output_bytes,
-            deny_patterns=config.sandbox.deny_patterns,
-            dry_run=config.sandbox.dry_run,
-        )
-        + build_control_tools(state)
-    )
-    for tool in tools:
-        registry.register(tool)
-    return registry
+def _plugins_dir(config: Config) -> str:
+    """The plugins directory to discover tools from.
+
+    A configured ``tool_evolution.plugins_dir`` wins; an empty value falls back
+    to the packaged built-in plugins so the harness works from any cwd.
+    """
+    configured = getattr(getattr(config, "tool_evolution", None), "plugins_dir", "")
+    return configured or str(default_plugins_dir())
+
+
+def build_registry(
+    config: Config,
+    jail: WorkspaceJail,
+    state: TaskState,
+    *,
+    on_event: Any = None,
+) -> ToolRegistry:
+    """Discover and register the active tool plugins into a registry.
+
+    Tools are loaded from ``tool_evolution.plugins_dir`` (defaulting to the
+    packaged built-ins) via :class:`PluginLoader`. The built-in plugins pin a
+    load priority so the tool list keeps its v1 order, so this is behaviourally
+    identical to the old hardcoded assembly — just directory-discovered and
+    status-filtered. ``on_event`` (optional) routes plugin rejections/skips into
+    the run trace; a clean built-in load emits nothing.
+    """
+    ctx = make_tool_context(config, jail, state)
+    loader = PluginLoader(_plugins_dir(config), ctx, on_event=on_event)
+    return loader.load()
 
 
 class Agent:
@@ -192,11 +202,16 @@ class Agent:
 
         jail = WorkspaceJail(config.sandbox.workspace_root)
         state = TaskState()
-        registry = build_registry(config, jail, state)
+
+        # The logger is created before the registry so plugin discovery can route
+        # any rejection/skip into the same run trace as everything else.
+        logger = EventLogger(config.logging.trace_file, console=config.logging.console)
+        registry = build_registry(
+            config, jail, state, on_event=lambda event, fields: logger.log(event, **fields)
+        )
         if policy is not None and policy.tool_descriptions:
             _apply_tool_descriptions(registry, policy.tool_descriptions)
 
-        logger = EventLogger(config.logging.trace_file, console=config.logging.console)
         llm = llm or LLMClient.from_config(config.llm)
         # Route the client's retry/error events into the same trace as the loop.
         if isinstance(llm, LLMClient):
