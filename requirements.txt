@@ -1,0 +1,5 @@
+openai>=1.0
+pyyaml>=6.0
+
+# Test dependency (not required to run the harness)
+pytest>=7.0

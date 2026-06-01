@@ -1,0 +1,202 @@
+"""The ReAct agent loop.
+
+The :class:`Agent` wires together the LLM client, the tool registry, and the
+event logger, then drives a reason -> act -> observe loop using native
+OpenAI tool calling:
+
+1. Send the running message list (system + task + history) to the model.
+2. Append the assistant message. If it has no tool calls, the model answered in
+   prose and the loop ends.
+3. Otherwise dispatch every requested tool call, appending one ``tool``-role
+   result message per call (keyed by ``tool_call_id``) before the next request.
+4. Stop when the model calls ``task_done``, or when the step / token budget is
+   exhausted.
+
+Tool errors are returned to the model as observations (never raised), so the
+agent can self-correct instead of crashing.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from .config import Config
+from .llm_client import LLMClient
+from .logging_ import EventLogger
+from .prompts import SYSTEM_PROMPT
+from .sandbox import WorkspaceJail
+from .tools import (
+    TaskState,
+    ToolRegistry,
+    build_control_tools,
+    build_exec_tools,
+    build_file_tools,
+    build_search_tools,
+)
+
+
+@dataclass
+class RunResult:
+    """Outcome of an agent run."""
+
+    status: str  # "done" | "max_steps" | "max_tokens" | "answered"
+    summary: str
+    steps: int
+    total_tokens: int
+    messages: list[dict[str, Any]]
+
+
+def build_registry(config: Config, jail: WorkspaceJail, state: TaskState) -> ToolRegistry:
+    """Assemble the full v1 tool set into a registry."""
+    registry = ToolRegistry()
+    tools = (
+        build_file_tools(jail, config.sandbox.max_output_bytes)
+        + build_search_tools(jail, config.sandbox.max_output_bytes)
+        + build_exec_tools(
+            jail,
+            command_timeout_s=config.sandbox.command_timeout_s,
+            max_output_bytes=config.sandbox.max_output_bytes,
+            deny_patterns=config.sandbox.deny_patterns,
+            dry_run=config.sandbox.dry_run,
+        )
+        + build_control_tools(state)
+    )
+    for tool in tools:
+        registry.register(tool)
+    return registry
+
+
+class Agent:
+    """Drives the ReAct loop for a single task."""
+
+    def __init__(
+        self,
+        config: Config,
+        llm: LLMClient,
+        logger: EventLogger,
+        registry: ToolRegistry,
+        state: TaskState,
+    ) -> None:
+        self.config = config
+        self.llm = llm
+        self.logger = logger
+        self.registry = registry
+        self.state = state
+
+    @classmethod
+    def create(cls, config: Config, llm: LLMClient | None = None) -> "Agent":
+        """Build an agent and all its collaborators from config."""
+        jail = WorkspaceJail(config.sandbox.workspace_root)
+        state = TaskState()
+        registry = build_registry(config, jail, state)
+        logger = EventLogger(config.logging.trace_file, console=config.logging.console)
+        llm = llm or LLMClient.from_config(config.llm)
+        return cls(config, llm, logger, registry, state)
+
+    def run(self, task: str) -> RunResult:
+        """Execute ``task`` to completion or until a budget is hit."""
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": task},
+        ]
+        tools = self.registry.schemas()
+
+        status = "max_steps"
+        try:
+            for _ in range(self.config.loop.max_steps):
+                step = self.logger.record_step()
+
+                self.logger.log("llm_request", step=step, num_messages=len(messages))
+                assistant = self.llm.complete(messages, tools=tools, tool_choice="auto")
+                messages.append(_assistant_to_dict(assistant))
+
+                self.logger.set_total_tokens(self.llm.usage.total_tokens)
+                tool_calls = getattr(assistant, "tool_calls", None) or []
+                self.logger.log(
+                    "assistant_message",
+                    step=step,
+                    content=getattr(assistant, "content", None),
+                    tool_calls=[_call_summary(c) for c in tool_calls],
+                )
+
+                if not tool_calls:
+                    # Model responded in prose with no action: treat as a final answer.
+                    status = "answered"
+                    self.state.summary = getattr(assistant, "content", "") or ""
+                    break
+
+                for call in tool_calls:
+                    self.logger.log("tool_call", step=step, **_call_summary(call))
+                    result_msg = self.registry.dispatch(call)
+                    messages.append(result_msg)
+                    self.logger.log(
+                        "tool_result",
+                        step=step,
+                        tool_call_id=result_msg["tool_call_id"],
+                        is_error=result_msg["content"].startswith("ERROR: "),
+                        content=result_msg["content"],
+                    )
+
+                if self.state.done:
+                    status = "done"
+                    break
+
+                if self.llm.usage.total_tokens >= self.config.loop.max_total_tokens:
+                    status = "max_tokens"
+                    break
+        finally:
+            self.logger.log(
+                "loop_end",
+                status=status,
+                steps=self.logger.steps,
+                total_tokens=self.llm.usage.total_tokens,
+                elapsed_s=self.logger.elapsed(),
+            )
+            self.logger.close()
+
+        return RunResult(
+            status=status,
+            summary=self.state.summary,
+            steps=self.logger.steps,
+            total_tokens=self.llm.usage.total_tokens,
+            messages=messages,
+        )
+
+
+def _assistant_to_dict(assistant: Any) -> dict[str, Any]:
+    """Convert an assistant message object into the dict form for the next request.
+
+    Preserves ``tool_calls`` exactly so the follow-up ``tool`` messages can be
+    matched by id.
+    """
+    msg: dict[str, Any] = {
+        "role": "assistant",
+        "content": getattr(assistant, "content", None) or "",
+    }
+    tool_calls = getattr(assistant, "tool_calls", None)
+    if tool_calls:
+        msg["tool_calls"] = [
+            {
+                "id": c.id,
+                "type": "function",
+                "function": {
+                    "name": c.function.name,
+                    "arguments": c.function.arguments,
+                },
+            }
+            for c in tool_calls
+        ]
+    return msg
+
+
+def _call_summary(call: Any) -> dict[str, str]:
+    """Compact (name, arguments) view of a tool call for logging."""
+    fn = getattr(call, "function", None) or {}
+    name = getattr(fn, "name", "") if not isinstance(fn, dict) else fn.get("name", "")
+    args = (
+        getattr(fn, "arguments", "")
+        if not isinstance(fn, dict)
+        else fn.get("arguments", "")
+    )
+    return {"name": name, "arguments": args or ""}
