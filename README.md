@@ -125,6 +125,26 @@ All execution is confined by `sandbox.py`:
   refused.
 - **Dry-run** — `--dry-run` echoes commands instead of executing them.
 
+> **TODO — run tool execution in a real sandbox.** Today's guardrails are
+> *in-process* and run with the **full privileges of the harness user**: the
+> path jail only confines paths routed through it, while `run_shell` hands an
+> arbitrary string to `/bin/sh -c` with no confinement on what it can reach
+> (network, `$HOME`, secrets), and the regex deny-list is a speed bump, not a
+> boundary. This matters most for the self-evolving path — the benchmark runner
+> executes task `setup/`/`grade.py`, and layer 5 aims to run agent-authored
+> tools. Planned, cheapest → strongest:
+> - **Quick wins (in-process):** pass a minimal **allow-listed env** to
+>   `run_subprocess` instead of inheriting `os.environ` (stops API-key/secret
+>   leakage into every command); route the benchmark runner's setup/grade
+>   execution through the same sandbox.
+> - **Real boundary (OS-level):** introduce an `ExecutionBackend` interface with
+>   a `LocalBackend` (current behavior, for trusted/dev use) and a default
+>   `ContainerBackend` (Docker/Podman per run: workspace bind-mount only,
+>   `--network=none` by default, dropped caps, read-only rootfs, CPU/mem/pids
+>   limits). Keep the jail + deny-list as a fast pre-filter (defense in depth).
+> - **Stronger isolation (later):** microVM / gVisor for kernel-level escape
+>   resistance.
+
 ## Experience layer (memory)
 
 The harness can **learn from its own runs**. When `memory.enabled` is set, every
